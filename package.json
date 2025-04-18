@@ -1,0 +1,11 @@
+{
+  "name": "portal-connect-signaling",
+  "version": "1.0.0",
+  "main": "signalingServer.js",
+  "scripts": {
+    "start": "node signalingServer.js"
+  },
+  "dependencies": {
+    "ws": "^8.13.0"
+  }
+}
