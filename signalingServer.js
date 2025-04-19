@@ -1,33 +1,48 @@
-const WebSocket = require('ws');
-
-const server = new WebSocket.Server({ port: process.env.PORT || 3001 });
+const WebSocket = require("ws");
+const PORT = process.env.PORT || 3001;
+const wss = new WebSocket.Server({ port: PORT });
 
 const sessions = {};
 
-server.on('connection', (socket) => {
-  socket.on('message', (msg) => {
-    const data = JSON.parse(msg);
-
-    if (data.type === 'create') {
-      sessions[data.code] = socket;
+wss.on("connection", (ws) => {
+  ws.on("message", (msg) => {
+    let data;
+    try {
+      data = JSON.parse(msg);
+    } catch (e) {
+      return;
     }
 
-    if (data.type === 'join') {
-      if (sessions[data.code]) {
-        sessions[data.code].send(JSON.stringify({ type: 'guest-joined' }));
-        sessions[data.code].paired = socket;
-        socket.paired = sessions[data.code];
+    const { type, code, payload } = data;
+
+    if (type === "create") {
+      sessions[code] = { host: ws, guest: null };
+    } else if (type === "join" && sessions[code]) {
+      sessions[code].guest = ws;
+      sessions[code].host.send(JSON.stringify({ type: "guest-joined" }));
+    } else if (type === "signal") {
+      const target = sessions[code]?.host === ws
+        ? sessions[code].guest
+        : sessions[code].host;
+      if (target) {
+        target.send(JSON.stringify({ type: "signal", payload }));
       }
-    }
-
-    if (data.type === 'signal' || data.type === 'input') {
-      if (socket.paired) {
-        socket.paired.send(JSON.stringify(data));
+    } else if (type === "input" && sessions[code]) {
+      const host = sessions[code].host;
+      if (host) {
+        host.send(JSON.stringify({ type: "input", payload }));
       }
     }
   });
 
-  socket.on('close', () => {
-    if (socket.paired) socket.paired.close();
+  ws.on("close", () => {
+    for (const code in sessions) {
+      if (sessions[code].host === ws || sessions[code].guest === ws) {
+        delete sessions[code];
+        break;
+      }
+    }
   });
 });
+
+console.log(`✅ Signaling server running on port ${PORT}`);
