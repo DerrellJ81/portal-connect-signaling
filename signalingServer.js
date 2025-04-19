@@ -5,14 +5,14 @@ const wss = new WebSocket.Server({ port: PORT });
 const sessions = {};
 
 wss.on("connection", (ws) => {
-  console.log("✅ New WebSocket connection");
+  console.log("✅ New client connected");
 
   ws.on("message", (msg) => {
     let data;
     try {
       data = JSON.parse(msg);
-    } catch (err) {
-      console.error("❌ Invalid JSON:", msg);
+    } catch (e) {
+      console.warn("⚠️ Invalid JSON received");
       return;
     }
 
@@ -24,23 +24,27 @@ wss.on("connection", (ws) => {
     }
 
     else if (type === "join") {
-      const session = sessions[code];
-      if (!session || !session.host) {
+      if (!sessions[code]) {
         ws.send(JSON.stringify({ type: "error", message: "Session not found." }));
-        console.warn(`⚠️ Join attempt failed for session: ${code}`);
+        console.warn(`❌ Attempted join on invalid session: ${code}`);
         return;
       }
 
-      session.guest = ws;
-      session.host.send(JSON.stringify({ type: "guest-joined" }));
-      console.log(`👥 Guest joined session: ${code}`);
+      sessions[code].guest = ws;
+
+      try {
+        sessions[code].host.send(JSON.stringify({ type: "guest-joined" }));
+        console.log(`🔗 Guest joined session: ${code}`);
+      } catch (e) {
+        console.warn(`⚠️ Failed to notify host for session ${code}`);
+      }
     }
 
     else if (type === "signal") {
       const session = sessions[code];
       if (!session) return;
 
-      const target = (session.host === ws) ? session.guest : session.host;
+      const target = session.host === ws ? session.guest : session.host;
       if (target && target.readyState === WebSocket.OPEN) {
         target.send(JSON.stringify({ type: "signal", payload }));
       }
@@ -48,8 +52,7 @@ wss.on("connection", (ws) => {
 
     else if (type === "input") {
       const session = sessions[code];
-      if (!session || !session.host) return;
-      if (session.host.readyState === WebSocket.OPEN) {
+      if (session && session.host && session.host.readyState === WebSocket.OPEN) {
         session.host.send(JSON.stringify({ type: "input", payload }));
       }
     }
@@ -57,10 +60,10 @@ wss.on("connection", (ws) => {
 
   ws.on("close", () => {
     for (const code in sessions) {
-      const s = sessions[code];
-      if (s.host === ws || s.guest === ws) {
+      const session = sessions[code];
+      if (session.host === ws || session.guest === ws) {
+        console.log(`❌ Session closed: ${code}`);
         delete sessions[code];
-        console.log(`🗑️ Session ${code} closed`);
         break;
       }
     }
