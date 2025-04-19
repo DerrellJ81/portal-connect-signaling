@@ -1,73 +1,65 @@
 const WebSocket = require("ws");
 const PORT = process.env.PORT || 10000;
-const wss = new WebSocket.Server({ port: PORT });
 
-const sessions = {};
+const wss = new WebSocket.Server({ port: PORT }, () => {
+  console.log(`✅ Signaling server running on port ${PORT}`);
+});
 
-wss.on("connection", (ws) => {
-  console.log("✅ New client connected");
+const sessions = new Map(); // sessionCode -> { host, guest }
 
-  ws.on("message", (msg) => {
-    let data;
+wss.on("connection", (socket) => {
+  socket.on("message", (message) => {
     try {
-      data = JSON.parse(msg);
-    } catch (e) {
-      console.warn("⚠️ Invalid JSON received");
-      return;
-    }
+      const data = JSON.parse(message);
+      const { type, code, payload } = data;
 
-    const { type, code, payload } = data;
+      switch (type) {
+        case "create":
+          sessions.set(code, { host: socket, guest: null });
+          console.log(`📡 Session created: ${code}`);
+          break;
 
-    if (type === "create") {
-      sessions[code] = { host: ws, guest: null };
-      console.log(`📡 Session created: ${code}`);
-    }
+        case "join":
+          if (!sessions.has(code)) {
+            socket.send(JSON.stringify({ type: "error", message: "Session not found." }));
+            return;
+          }
+          const session = sessions.get(code);
+          session.guest = socket;
+          sessions.set(code, session);
+          session.host.send(JSON.stringify({ type: "guest-joined" }));
+          console.log(`👤 Guest joined session: ${code}`);
+          break;
 
-    else if (type === "join") {
-      if (!sessions[code]) {
-        ws.send(JSON.stringify({ type: "error", message: "Session not found." }));
-        console.warn(`❌ Attempted join on invalid session: ${code}`);
-        return;
+        case "signal":
+          const targetSession = sessions.get(code);
+          if (targetSession) {
+            const target = socket === targetSession.host ? targetSession.guest : targetSession.host;
+            if (target) {
+              target.send(JSON.stringify({ type: "signal", payload }));
+            }
+          }
+          break;
+
+        case "input":
+          const inputSession = sessions.get(code);
+          if (inputSession && inputSession.host) {
+            inputSession.host.send(JSON.stringify({ type: "input", payload }));
+          }
+          break;
       }
-
-      sessions[code].guest = ws;
-
-      try {
-        sessions[code].host.send(JSON.stringify({ type: "guest-joined" }));
-        console.log(`🔗 Guest joined session: ${code}`);
-      } catch (e) {
-        console.warn(`⚠️ Failed to notify host for session ${code}`);
-      }
-    }
-
-    else if (type === "signal") {
-      const session = sessions[code];
-      if (!session) return;
-
-      const target = session.host === ws ? session.guest : session.host;
-      if (target && target.readyState === WebSocket.OPEN) {
-        target.send(JSON.stringify({ type: "signal", payload }));
-      }
-    }
-
-    else if (type === "input") {
-      const session = sessions[code];
-      if (session && session.host && session.host.readyState === WebSocket.OPEN) {
-        session.host.send(JSON.stringify({ type: "input", payload }));
-      }
+    } catch (err) {
+      console.error("❌ Error parsing message:", err.message);
     }
   });
 
-  ws.on("close", () => {
-    for (const code in sessions) {
-      const session = sessions[code];
-      if (session.host === ws || session.guest === ws) {
+  socket.on("close", () => {
+    for (const [code, session] of sessions.entries()) {
+      if (session.host === socket || session.guest === socket) {
+        sessions.delete(code);
         console.log(`❌ Session closed: ${code}`);
-        delete sessions[code];
         break;
       }
     }
   });
 });
-
-console.log(`✅ Signaling server running on port ${PORT}`);
